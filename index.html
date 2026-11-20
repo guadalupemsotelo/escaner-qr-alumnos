@@ -5,11 +5,93 @@
   <meta charset="UTF-8">
   <meta name="viewport"
         content="width=device-width, initial-scale=1">
-  <title>Escáner QR de alumnos</title>
+  <title>Revisión de actividades</title>
+
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #eef3f8;
+      text-align: center;
+      padding: 15px;
+    }
+    h2 { color: #174a7e; }
+    #reader {
+      width: 100%;
+      max-width: 400px;
+      margin: 20px auto;
+    }
+    button {
+      padding: 14px;
+      background: #1769aa;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 16px;
+    }
+    #resultado {
+      background: white;
+      padding: 15px;
+      border-radius: 8px;
+      overflow-wrap: anywhere;
+    }
+  </style>
 </head>
+
 <body>
-  <h1>Revisión de actividades</h1>
-  <h2>Escáner QR de alumnos</h2>
-  <p>Mi aplicación está funcionando.</p>
+  <h2>Revisión de actividades</h2>
+  <h3>Escáner QR de alumnos</h3>
+
+  <button id="boton"
+          onclick="iniciarCamara()">
+    Activar cámara
+  </button>
+
+  <div id="reader"></div>
+
+  <p id="resultado">
+    Esperando escaneo...
+  </p>
+
+  <script>
+    let escaner;
+    let activo = false;
+
+    async function iniciarCamara() {
+      if (activo) return;
+
+      document.getElementById("boton")
+        .disabled = true;
+
+      try {
+        escaner = new Html5Qrcode("reader");
+
+        await escaner.start(
+          { facingMode: "environment" },
+          {
+            fps: 10,
+            qrbox: { width: 220, height: 220 }
+          },
+          (texto) => {
+            document.getElementById(
+              "resultado"
+            ).textContent = "QR leído: " + texto;
+          },
+          () => {}
+        );
+
+        activo = true;
+      } catch (error) {
+        document.getElementById(
+          "resultado"
+        ).textContent =
+          "No se pudo abrir la cámara: " + error;
+
+        document.getElementById("boton")
+          .disabled = false;
+      }
+    }
+  </script>
 </body>
 </html>
