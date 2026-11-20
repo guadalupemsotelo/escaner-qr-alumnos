@@ -5,7 +5,7 @@
   <meta charset="UTF-8">
   <meta name="viewport"
         content="width=device-width, initial-scale=1">
-  <title>Revisión de actividades</title>
+  <title>Control de alumnos QR</title>
 
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
 
@@ -16,22 +16,50 @@
       text-align: center;
       padding: 15px;
     }
+
     h2 { color: #174a7e; }
-    #reader {
-      width: 100%;
-      max-width: 400px;
-      margin: 20px auto;
+
+    .panel {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      max-width: 450px;
+      margin: 15px auto;
     }
-    button {
+
+    select, button {
+      width: 100%;
       padding: 14px;
+      margin: 8px 0;
+      border-radius: 8px;
+      font-size: 16px;
+      box-sizing: border-box;
+    }
+
+    select {
+      border: 1px solid #bbb;
+      background: white;
+    }
+
+    button {
       background: #1769aa;
       color: white;
       border: none;
-      border-radius: 8px;
-      font-size: 16px;
+      cursor: pointer;
     }
+
+    button:disabled {
+      opacity: 0.6;
+    }
+
+    #reader {
+      width: 100%;
+      max-width: 400px;
+      margin: 15px auto;
+    }
+
     #resultado {
-      background: white;
+      background: #f0f5fa;
       padding: 15px;
       border-radius: 8px;
       overflow-wrap: anywhere;
@@ -40,29 +68,109 @@
 </head>
 
 <body>
-  <h2>Revisión de actividades</h2>
-  <h3>Escáner QR de alumnos</h3>
 
-  <button id="boton"
-          onclick="iniciarCamara()">
-    Activar cámara
-  </button>
+  <h2>Control de alumnos QR</h2>
 
-  <div id="reader"></div>
+  <div class="panel">
+    <h3>Seleccionar registro</h3>
 
-  <p id="resultado">
-    Esperando escaneo...
-  </p>
+    <label for="tipo">Tipo de registro:</label>
+    <select id="tipo" onchange="cambiarTipo()">
+      <option value="asistencia">Asistencias</option>
+      <option value="actividad">Actividades</option>
+    </select>
+
+    <div id="panelAsistencia">
+      <label for="estado">Estado de asistencia:</label>
+
+      <select id="estado">
+        <option value="Asistencia">Asistencia</option>
+        <option value="Falta">Falta</option>
+        <option value="Retardo">Retardo</option>
+        <option value="Justificante">Justificante</option>
+      </select>
+    </div>
+
+    <div id="panelActividad" hidden>
+      <p>
+        La selección de actividades se
+        conectará con Google Sheets.
+      </p>
+    </div>
+
+    <button id="boton" onclick="iniciarCamara()">
+      Activar cámara
+    </button>
+
+    <div id="reader"></div>
+
+    <p id="resultado">Esperando escaneo...</p>
+  </div>
 
   <script>
     let escaner;
     let activo = false;
+    let ultimoTexto = "";
+    let ultimoMomento = 0;
+
+    function cambiarTipo() {
+      const asistencia =
+        document.getElementById("tipo").value
+        === "asistencia";
+
+      document.getElementById(
+        "panelAsistencia"
+      ).hidden = !asistencia;
+
+      document.getElementById(
+        "panelActividad"
+      ).hidden = asistencia;
+    }
+
+    function procesarQR(texto) {
+      const ahora = Date.now();
+
+      // Evitar lecturas repetidas inmediatas.
+      if (
+        texto === ultimoTexto &&
+        ahora - ultimoMomento < 3000
+      ) {
+        return;
+      }
+
+      ultimoTexto = texto;
+      ultimoMomento = ahora;
+
+      const tipo =
+        document.getElementById("tipo").value;
+
+      const estado =
+        document.getElementById("estado").value;
+
+      let mensaje = "QR leído: " + texto;
+
+      if (tipo === "asistencia") {
+        mensaje += "\nEstado: " + estado;
+      } else {
+        mensaje += "\nRegistro: Actividad";
+      }
+
+      const resultado =
+        document.getElementById("resultado");
+
+      resultado.style.whiteSpace = "pre-line";
+      resultado.textContent = mensaje;
+
+      // Pendiente: enviar registro a Apps Script.
+    }
 
     async function iniciarCamara() {
       if (activo) return;
 
-      document.getElementById("boton")
-        .disabled = true;
+      const boton =
+        document.getElementById("boton");
+
+      boton.disabled = true;
 
       try {
         escaner = new Html5Qrcode("reader");
@@ -71,13 +179,12 @@
           { facingMode: "environment" },
           {
             fps: 10,
-            qrbox: { width: 220, height: 220 }
+            qrbox: {
+              width: 220,
+              height: 220
+            }
           },
-          (texto) => {
-            document.getElementById(
-              "resultado"
-            ).textContent = "QR leído: " + texto;
-          },
+          procesarQR,
           () => {}
         );
 
@@ -86,12 +193,13 @@
         document.getElementById(
           "resultado"
         ).textContent =
-          "No se pudo abrir la cámara: " + error;
+          "No se pudo abrir la cámara: " +
+          error;
 
-        document.getElementById("boton")
-          .disabled = false;
+        boton.disabled = false;
       }
     }
   </script>
+
 </body>
 </html>
