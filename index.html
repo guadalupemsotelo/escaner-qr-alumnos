@@ -3,11 +3,11 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport"
-        content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Control de alumnos QR</title>
 
   <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
 
   <style>
     body {
@@ -16,9 +16,7 @@
       text-align: center;
       padding: 15px;
     }
-
     h2 { color: #174a7e; }
-
     .panel {
       background: white;
       padding: 20px;
@@ -26,151 +24,491 @@
       max-width: 450px;
       margin: 15px auto;
     }
-
-    select, button {
+    select, button, input {
       width: 100%;
-      padding: 14px;
+      padding: 13px;
       margin: 8px 0;
       border-radius: 8px;
       font-size: 16px;
       box-sizing: border-box;
     }
-
-    select {
+    select, input {
       border: 1px solid #bbb;
       background: white;
     }
-
     button {
       background: #1769aa;
       color: white;
       border: none;
       cursor: pointer;
     }
-
-    button:disabled {
-      opacity: 0.6;
-    }
-
+    button:disabled { opacity: 0.5; }
     #reader {
       width: 100%;
       max-width: 400px;
       margin: 15px auto;
     }
-
     #resultado {
       background: #f0f5fa;
       padding: 15px;
       border-radius: 8px;
+      white-space: pre-line;
       overflow-wrap: anywhere;
     }
+    [hidden] { display: none !important; }
   </style>
 </head>
 
 <body>
-
   <h2>Control de alumnos QR</h2>
 
   <div class="panel">
-    <h3>Seleccionar registro</h3>
-
-    <label for="tipo">Tipo de registro:</label>
-    <select id="tipo" onchange="cambiarTipo()">
-      <option value="asistencia">Asistencias</option>
-      <option value="actividad">Actividades</option>
-    </select>
-
-    <div id="panelAsistencia">
-      <label for="estado">Estado de asistencia:</label>
-
-      <select id="estado">
-        <option value="Asistencia">Asistencia</option>
-        <option value="Falta">Falta</option>
-        <option value="Retardo">Retardo</option>
-        <option value="Justificante">Justificante</option>
-      </select>
-    </div>
-
-    <div id="panelActividad" hidden>
-      <p>
-        La selección de actividades se
-        conectará con Google Sheets.
-      </p>
-    </div>
-
-    <button id="boton" onclick="iniciarCamara()">
-      Activar cámara
+    <button id="login" onclick="iniciarSesion()">
+      Iniciar sesión con Google
     </button>
 
-    <div id="reader"></div>
+    <p id="conexion">Sin conexión con Google Sheets</p>
 
-    <p id="resultado">Esperando escaneo...</p>
+    <div id="controles" hidden>
+      <label for="docente">Docente:</label>
+      <input id="docente" placeholder="Nombre del docente">
+
+      <label for="tipo">Tipo de registro:</label>
+      <select id="tipo" onchange="cambiarTipo()">
+        <option value="asistencia">Asistencias</option>
+        <option value="actividad">Actividades</option>
+      </select>
+
+      <div id="panelAsistencia">
+        <label for="estado">Estado de asistencia:</label>
+        <select id="estado">
+          <option>Asistencia</option>
+          <option>Falta</option>
+          <option>Retardo</option>
+          <option>Justificante</option>
+        </select>
+      </div>
+
+      <div id="panelActividad" hidden>
+        <label for="actividad">Actividad:</label>
+        <select id="actividad"></select>
+
+        <label for="estadoActividad">Estado de entrega:</label>
+        <select id="estadoActividad">
+          <option>Completo</option>
+          <option>Incompleto</option>
+          <option>Extemporáneo</option>
+        </select>
+      </div>
+
+      <button id="boton" onclick="iniciarCamara()">
+        Activar cámara
+      </button>
+
+      <button id="detener" onclick="detenerCamara()" hidden>
+        Detener cámara
+      </button>
+    </div>
+
+    <div id="reader"></div>
+    <p id="resultado">Inicia sesión para comenzar.</p>
   </div>
 
   <script>
+    const CLIENT_ID =
+      "104546724340-o80s3ubb04q8rea7hu17703a9oir8h29.apps.googleusercontent.com";
+
+    const SHEET_ID =
+      "1DVEADDqujW4fDp63GEVG52ZP74crRkr1lZq3o4R3gG8";
+
+    const API =
+      "https://sheets.googleapis.com/v4/spreadsheets/" + SHEET_ID;
+
+    const ZONA = "America/Mexico_City";
+
+    let clienteOAuth;
+    let token = "";
+    let alumnos = [];
+    let actividades = [];
     let escaner;
     let activo = false;
-    let ultimoTexto = "";
+    let ocupado = false;
+    let ultimoQR = "";
     let ultimoMomento = 0;
 
-    function cambiarTipo() {
-      const asistencia =
-        document.getElementById("tipo").value
-        === "asistencia";
+    const $ = id => document.getElementById(id);
 
-      document.getElementById(
-        "panelAsistencia"
-      ).hidden = !asistencia;
-
-      document.getElementById(
-        "panelActividad"
-      ).hidden = asistencia;
+    function mensaje(texto) {
+      $("resultado").textContent = texto;
     }
 
-    function procesarQR(texto) {
-      const ahora = Date.now();
-
-      // Evitar lecturas repetidas inmediatas.
-      if (
-        texto === ultimoTexto &&
-        ahora - ultimoMomento < 3000
-      ) {
+    function iniciarSesion() {
+      if (!window.google?.accounts?.oauth2) {
+        mensaje("Google todavía está cargando. Intenta nuevamente.");
         return;
       }
 
-      ultimoTexto = texto;
-      ultimoMomento = ahora;
+      clienteOAuth = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: "https://www.googleapis.com/auth/spreadsheets",
+        callback: async respuesta => {
+          if (respuesta.error || !respuesta.access_token) {
+            mensaje("No se pudo autorizar la cuenta de Google.");
+            return;
+          }
 
-      const tipo =
-        document.getElementById("tipo").value;
+          token = respuesta.access_token;
+          $("conexion").textContent = "Conectando con Google Sheets...";
 
-      const estado =
-        document.getElementById("estado").value;
+          try {
+            await cargarDatos();
+            $("conexion").textContent = "Conectado a Google Sheets";
+            $("controles").hidden = false;
+            $("login").textContent = "Renovar acceso a Google";
+            mensaje("Conexión correcta. Todavía no se ha registrado nada.");
+          } catch (error) {
+            $("conexion").textContent = "Error de conexión";
+            mensaje("No se pudieron cargar los datos:\n" + error.message);
+          }
+        }
+      });
 
-      let mensaje = "QR leído: " + texto;
+      clienteOAuth.requestAccessToken({
+        prompt: token ? "" : "consent"
+      });
+    }
 
-      if (tipo === "asistencia") {
-        mensaje += "\nEstado: " + estado;
-      } else {
-        mensaje += "\nRegistro: Actividad";
+    async function solicitar(ruta, opciones = {}) {
+      if (!token) throw new Error("Debes iniciar sesión.");
+
+      const respuesta = await fetch(API + ruta, {
+        ...opciones,
+        headers: {
+          Authorization: "Bearer " + token,
+          ...(opciones.body ? {"Content-Type": "application/json"} : {})
+        }
+      });
+
+      if (!respuesta.ok) {
+        let detalle = "";
+        try {
+          const error = await respuesta.json();
+          detalle = error.error?.message || "";
+        } catch (_) {}
+
+        if (respuesta.status === 401) {
+          throw new Error("La sesión venció. Pulsa Renovar acceso a Google.");
+        }
+
+        throw new Error(
+          "Google Sheets respondió " + respuesta.status + ": " + detalle
+        );
       }
 
-      const resultado =
-        document.getElementById("resultado");
+      return respuesta.json();
+    }
 
-      resultado.style.whiteSpace = "pre-line";
-      resultado.textContent = mensaje;
+    async function leerHoja(nombre, rango) {
+      const ruta = "/values/" +
+        encodeURIComponent(nombre + "!" + rango);
 
-      // Pendiente: enviar registro a Apps Script.
+      const datos = await solicitar(ruta);
+      return datos.values || [];
+    }
+
+    async function cargarDatos() {
+      const [filasAlumnos, filasActividades] = await Promise.all([
+        leerHoja("Alumnos", "A2:F"),
+        leerHoja("Actividades", "A2:D")
+      ]);
+
+      alumnos = filasAlumnos
+        .filter(f => f[3] && normalizar(f[5]) === "si")
+        .map(f => ({
+          id: String(f[0] || "").trim(),
+          nombre: String(f[1] || "").trim(),
+          grupo: String(f[2] || "").trim(),
+          qr: String(f[3] || "").trim()
+        }));
+
+      actividades = filasActividades
+        .filter(f => f[0] && normalizar(f[3]) === "si")
+        .map(f => ({
+          id: String(f[0]).trim(),
+          nombre: String(f[1] || "").trim(),
+          grupo: String(f[2] || "").trim()
+        }));
+
+      const selector = $("actividad");
+      selector.replaceChildren();
+
+      actividades.forEach(a => {
+        const opcion = document.createElement("option");
+        opcion.value = a.id;
+        opcion.textContent = a.id + " - " + a.nombre;
+        selector.appendChild(opcion);
+      });
+
+      if (!alumnos.length) {
+        throw new Error("No se encontraron alumnos activos.");
+      }
+    }
+
+    function normalizar(valor) {
+      return String(valor || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+    }
+
+    function cambiarTipo() {
+      const asistencia = $("tipo").value === "asistencia";
+      $("panelAsistencia").hidden = !asistencia;
+      $("panelActividad").hidden = asistencia;
+    }
+
+    function fechaHora() {
+      const ahora = new Date();
+
+      const partes = new Intl.DateTimeFormat("en-GB", {
+        timeZone: ZONA,
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hourCycle: "h23"
+      }).formatToParts(ahora);
+
+      const p = {};
+      partes.forEach(x => p[x.type] = x.value);
+
+      return {
+        fecha: `${p.day}/${p.month}/${p.year}`,
+        hora: `${p.hour}:${p.minute}:${p.second}`,
+        modificacion:
+          `${p.day}/${p.month}/${p.year} ${p.hour}:${p.minute}:${p.second}`
+      };
+    }
+
+    function mismaFecha(valor, fecha) {
+      const texto = String(valor || "").trim();
+      const a = texto.split("/");
+      const b = fecha.split("/");
+
+      if (a.length !== 3 || b.length !== 3) return false;
+
+      return Number(a[0]) === Number(b[0]) &&
+             Number(a[1]) === Number(b[1]) &&
+             Number(a[2]) === Number(b[2]);
+    }
+
+    async function agregar(nombre, valores) {
+      const ruta = "/values/" +
+        encodeURIComponent(nombre + "!A:K") +
+        ":append?valueInputOption=RAW&insertDataOption=INSERT_ROWS";
+
+      return solicitar(ruta, {
+        method: "POST",
+        body: JSON.stringify({
+          majorDimension: "ROWS",
+          values: [valores]
+        })
+      });
+    }
+
+    async function actualizar(nombre, fila, valores) {
+      const ultimaColumna =
+        nombre === "Asistencias" ? "G" : "K";
+
+      const rango = `${nombre}!A${fila}:${ultimaColumna}${fila}`;
+
+      return solicitar(
+        "/values/" + encodeURIComponent(rango) +
+        "?valueInputOption=RAW",
+        {
+          method: "PUT",
+          body: JSON.stringify({
+            majorDimension: "ROWS",
+            values: [valores]
+          })
+        }
+      );
+    }
+
+    async function registrarAsistencia(alumno, estado, momento, docente) {
+      const filas = await leerHoja("Asistencias", "A1:G");
+
+      const existentes = filas.slice(1);
+      const indice = existentes.findIndex(f =>
+        mismaFecha(f[0], momento.fecha) &&
+        String(f[2] || "").trim() === alumno.id
+      );
+
+      const valores = [
+        momento.fecha,
+        momento.hora,
+        alumno.id,
+        alumno.nombre,
+        alumno.grupo,
+        docente,
+        estado
+      ];
+
+      if (indice >= 0) {
+        const anterior = existentes[indice][6] || "";
+
+        if (anterior === estado) {
+          return "Ya existe esta asistencia. No se duplicó.";
+        }
+
+        await actualizar("Asistencias", indice + 2, valores);
+        return "Asistencia actualizada correctamente.";
+      }
+
+      await agregar("Asistencias", valores);
+      return "Asistencia guardada correctamente.";
+    }
+
+    async function registrarActividad(alumno, actividad, estado, momento, docente) {
+      const filas = await leerHoja("Trabajos", "A1:K");
+
+      const indice = filas.slice(1).findIndex(f =>
+        String(f[2] || "").trim() === alumno.id &&
+        String(f[5] || "").trim() === actividad.id
+      );
+
+      const calificaciones = {
+        Completo: 1,
+        Incompleto: 0.5,
+        Extemporáneo: 0.3
+      };
+
+      const calificacion = calificaciones[estado];
+
+      if (indice >= 0) {
+        const anterior = filas[indice + 1];
+
+        if (anterior[7] === estado) {
+          return "Esta actividad ya está registrada. No se duplicó.";
+        }
+
+        const valores = [
+          anterior[0] || momento.fecha,
+          anterior[1] || momento.hora,
+          alumno.id,
+          alumno.nombre,
+          alumno.grupo,
+          actividad.id,
+          actividad.nombre,
+          estado,
+          docente,
+          momento.modificacion,
+          calificacion
+        ];
+
+        await actualizar("Trabajos", indice + 2, valores);
+        return "Actividad actualizada correctamente.";
+      }
+
+      await agregar("Trabajos", [
+        momento.fecha,
+        momento.hora,
+        alumno.id,
+        alumno.nombre,
+        alumno.grupo,
+        actividad.id,
+        actividad.nombre,
+        estado,
+        docente,
+        momento.modificacion,
+        calificacion
+      ]);
+
+      return "Actividad guardada correctamente.";
+    }
+
+    async function procesarQR(texto) {
+      if (ocupado || !token) return;
+
+      const ahora = Date.now();
+
+      if (texto === ultimoQR && ahora - ultimoMomento < 5000) {
+        return;
+      }
+
+      ocupado = true;
+      ultimoQR = texto;
+      ultimoMomento = ahora;
+
+      try {
+        const docente = $("docente").value.trim();
+
+        if (!docente) {
+          throw new Error("Escribe primero el nombre del docente.");
+        }
+
+        const alumno = alumnos.find(a => a.qr === texto.trim());
+
+        if (!alumno) {
+          throw new Error("QR no reconocido o alumno inactivo.");
+        }
+
+        const momento = fechaHora();
+        let resultado;
+
+        if ($("tipo").value === "asistencia") {
+          resultado = await registrarAsistencia(
+            alumno,
+            $("estado").value,
+            momento,
+            docente
+          );
+        } else {
+          const actividad = actividades.find(
+            a => a.id === $("actividad").value
+          );
+
+          if (!actividad) {
+            throw new Error("Selecciona una actividad válida.");
+          }
+
+          if (actividad.grupo !== alumno.grupo) {
+            throw new Error("La actividad no corresponde al grupo del alumno.");
+          }
+
+          resultado = await registrarActividad(
+            alumno,
+            actividad,
+            $("estadoActividad").value,
+            momento,
+            docente
+          );
+        }
+
+        mensaje(
+          alumno.nombre + "\n" +
+          "Hora: " + momento.hora + "\n" +
+          resultado
+        );
+      } catch (error) {
+        mensaje("No se pudo registrar:\n" + error.message);
+      } finally {
+        ocupado = false;
+      }
     }
 
     async function iniciarCamara() {
-      if (activo) return;
+      if (activo || !token) return;
 
-      const boton =
-        document.getElementById("boton");
+      if (!$("docente").value.trim()) {
+        mensaje("Primero escribe el nombre del docente.");
+        return;
+      }
 
-      boton.disabled = true;
+      $("boton").disabled = true;
 
       try {
         escaner = new Html5Qrcode("reader");
@@ -179,27 +517,34 @@
           { facingMode: "environment" },
           {
             fps: 10,
-            qrbox: {
-              width: 220,
-              height: 220
-            }
+            qrbox: { width: 220, height: 220 }
           },
           procesarQR,
           () => {}
         );
 
         activo = true;
+        $("detener").hidden = false;
+        mensaje("Cámara activa. Escanea un código QR.");
       } catch (error) {
-        document.getElementById(
-          "resultado"
-        ).textContent =
-          "No se pudo abrir la cámara: " +
-          error;
+        mensaje("No se pudo abrir la cámara:\n" + error);
+        $("boton").disabled = false;
+      }
+    }
 
-        boton.disabled = false;
+    async function detenerCamara() {
+      if (!activo) return;
+
+      try {
+        await escaner.stop();
+        escaner.clear();
+      } finally {
+        activo = false;
+        $("boton").disabled = false;
+        $("detener").hidden = true;
+        mensaje("Cámara detenida.");
       }
     }
   </script>
-
 </body>
 </html>
